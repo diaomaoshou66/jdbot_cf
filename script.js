@@ -1,6 +1,6 @@
 // --- 配置 ---
 // !!! 重要：请将下面的 URL 替换为您 Render 后端的真实地址 !!!
-const API_URL_BASE = 'https://jd-bot-1.onrender.com'; 
+const API_URL_BASE = 'https://jd-bot-2.onrender.com'; 
 
 // --- DOM 元素 ---
 const loginOverlay = document.getElementById('login-overlay');
