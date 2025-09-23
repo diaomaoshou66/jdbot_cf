@@ -1,219 +1,206 @@
-:root {
-    --background-color: #121212;
-    --card-background: #1e1e1e;
-    --primary-text: #e0e0e0;
-    --secondary-text: #b0b0b0;
-    --border-color: #333;
-    --accent-color: #007bff;
-    --accent-hover: #0056b3;
-    --error-color: #dc3545;
-    --success-color: #28a745;
+// --- 配置 ---
+// !!! 重要：请将下面的 URL 替换为您 Render 后端的真实地址 !!!
+const API_URL_BASE = 'https://jd-bot-1.onrender.com'; 
+
+// --- DOM 元素 ---
+const loginOverlay = document.getElementById('login-overlay');
+const appContainer = document.getElementById('app-container');
+const apiKeyInput = document.getElementById('api-key-input');
+const loginButton = document.getElementById('login-button');
+const loginError = document.getElementById('login-error');
+
+const productSelect = document.getElementById('product-select');
+const cardCodesTextarea = document.getElementById('card-codes-textarea');
+const addCardsButton = document.getElementById('add-cards-button');
+const buttonText = document.querySelector('#add-cards-button .button-text');
+const spinner = document.querySelector('#add-cards-button .spinner');
+const resultMessage = document.getElementById('result-message');
+
+// --- 函数 ---
+
+/**
+ * 显示消息
+ * @param {string} message - 要显示的消息
+ * @param {boolean} isError - 是否是错误消息
+ */
+function showMessage(message, isError = false) {
+    resultMessage.textContent = message;
+    resultMessage.className = 'message'; // 重置 class
+    if (message) {
+        resultMessage.classList.add(isError ? 'error' : 'success');
+    }
 }
 
-* {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
+/**
+ * 切换加载状态
+ * @param {boolean} isLoading - 是否正在加载
+ */
+function setLoading(isLoading) {
+    if (isLoading) {
+        buttonText.classList.add('hidden');
+        spinner.classList.remove('hidden');
+        addCardsButton.disabled = true;
+    } else {
+        buttonText.classList.remove('hidden');
+        spinner.classList.add('hidden');
+        addCardsButton.disabled = false;
+    }
 }
 
-body {
-    font-family: 'Inter', sans-serif;
-    background-color: var(--background-color);
-    color: var(--primary-text);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
-    padding: 20px;
+/**
+ * 从后端 API 获取商品列表并填充下拉菜单
+ * @param {string} apiKey - 管理员 API 密钥
+ */
+async function fetchProducts(apiKey) {
+    try {
+        const response = await fetch(`${API_URL_BASE}/api/products`, {
+            headers: {
+                'Authorization': `Bearer ${apiKey}`
+            }
+        });
+
+        if (response.status === 401) {
+            throw new Error('API 密钥无效或未授权。');
+        }
+        if (!response.ok) {
+            throw new Error(`网络响应错误: ${response.statusText}`);
+        }
+
+        const products = await response.json();
+        
+        productSelect.innerHTML = '<option value="">-- 请选择一个商品 --</option>'; // 清空并添加默认选项
+        products.forEach(product => {
+            const option = document.createElement('option');
+            option.value = product.id;
+            option.textContent = `${product.name} (ID: ${product.id})`;
+            productSelect.appendChild(option);
+        });
+
+        return true; // 表示成功
+
+    } catch (error) {
+        console.error('获取商品失败:', error);
+        loginError.textContent = error.message;
+        sessionStorage.removeItem('adminApiKey'); // 验证失败，移除密钥
+        return false; // 表示失败
+    }
 }
 
-.overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.7);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    z-index: 1000;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.3s ease, visibility 0.3s ease;
+/**
+ * 提交卡密到后端 API
+ */
+async function addInventory() {
+    const apiKey = sessionStorage.getItem('adminApiKey');
+    if (!apiKey) {
+        showMessage('认证已过期，请刷新页面重新登录。', true);
+        return;
+    }
+
+    const productId = productSelect.value;
+    const cardCodes = cardCodesTextarea.value.trim();
+
+    if (!productId) {
+        showMessage('请选择一个商品。', true);
+        return;
+    }
+    if (!cardCodes) {
+        showMessage('请粘贴至少一个卡密。', true);
+        return;
+    }
+    
+    setLoading(true);
+    showMessage(''); // 清除旧消息
+
+    try {
+        const response = await fetch(`${API_URL_BASE}/api/inventory/add`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`
+            },
+            body: JSON.stringify({
+                product_id: parseInt(productId),
+                card_codes: cardCodes
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.error || '未知错误');
+        }
+
+        showMessage(`成功添加 ${result.added} 个卡密，跳过 ${result.skipped} 个重复卡密。`);
+        cardCodesTextarea.value = ''; // 成功后清空
+
+    } catch (error) {
+        console.error('添加卡密失败:', error);
+        showMessage(`操作失败: ${error.message}`, true);
+    } finally {
+        setLoading(false);
+    }
 }
 
-.overlay.visible {
-    opacity: 1;
-    visibility: visible;
+/**
+ * 处理登录逻辑
+ */
+async function handleLogin() {
+    const apiKey = apiKeyInput.value.trim();
+    if (!apiKey) {
+        loginError.textContent = 'API 密钥不能为空。';
+        return;
+    }
+    loginError.textContent = '';
+    loginButton.disabled = true;
+    loginButton.textContent = '正在验证...';
+
+    // 将密钥存入 session storage
+    sessionStorage.setItem('adminApiKey', apiKey);
+
+    // 尝试获取商品列表以验证密钥
+    const success = await fetchProducts(apiKey);
+
+    if (success) {
+        loginOverlay.classList.remove('visible');
+        appContainer.classList.remove('hidden');
+    } else {
+        // fetchProducts 内部已经处理了错误信息显示
+        loginButton.disabled = false;
+        loginButton.textContent = '登录';
+    }
 }
 
-.modal {
-    background-color: var(--card-background);
-    padding: 30px;
-    border-radius: 12px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    width: 90%;
-    max-width: 400px;
-    text-align: center;
-    border: 1px solid var(--border-color);
-}
 
-.modal h2 {
-    margin-bottom: 10px;
-    color: var(--primary-text);
-}
+// --- 事件监听 ---
+loginButton.addEventListener('click', handleLogin);
+apiKeyInput.addEventListener('keyup', (event) => {
+    if (event.key === 'Enter') {
+        handleLogin();
+    }
+});
 
-.modal p {
-    margin-bottom: 20px;
-    color: var(--secondary-text);
-    font-size: 14px;
-}
+addCardsButton.addEventListener('click', addInventory);
 
-.container {
-    width: 100%;
-    max-width: 700px;
-}
-
-header {
-    text-align: center;
-    margin-bottom: 30px;
-}
-
-header h1 {
-    font-size: 24px;
-    font-weight: 600;
-    color: var(--primary-text);
-}
-
-.card {
-    background-color: var(--card-background);
-    padding: 25px 30px;
-    border-radius: 12px;
-    border: 1px solid var(--border-color);
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
-}
-
-.card h2 {
-    font-size: 20px;
-    margin-bottom: 10px;
-}
-
-.card p {
-    font-size: 14px;
-    color: var(--secondary-text);
-    margin-bottom: 25px;
-}
-
-.form-group {
-    margin-bottom: 20px;
-}
-
-.form-group label {
-    display: block;
-    font-size: 14px;
-    font-weight: 500;
-    margin-bottom: 8px;
-    color: var(--secondary-text);
-}
-
-input[type="password"],
-select,
-textarea {
-    width: 100%;
-    padding: 12px;
-    background-color: #2a2a2a;
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    color: var(--primary-text);
-    font-family: 'Inter', sans-serif;
-    font-size: 14px;
-    transition: border-color 0.3s ease, box-shadow 0.3s ease;
-}
-
-input[type="password"]:focus,
-select:focus,
-textarea:focus {
-    outline: none;
-    border-color: var(--accent-color);
-    box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.2);
-}
-
-textarea {
-    resize: vertical;
-}
-
-button {
-    width: 100%;
-    padding: 12px;
-    background-color: var(--accent-color);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    font-size: 16px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background-color 0.3s ease;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-button:hover {
-    background-color: var(--accent-hover);
-}
-
-button:disabled {
-    background-color: #555;
-    cursor: not-allowed;
-}
-
-.spinner {
-    border: 3px solid rgba(255, 255, 255, 0.3);
-    border-radius: 50%;
-    border-top: 3px solid #fff;
-    width: 20px;
-    height: 20px;
-    animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-
-.message {
-    margin-top: 20px;
-    padding: 12px;
-    border-radius: 8px;
-    font-size: 14px;
-    text-align: center;
-    display: none;
-}
-
-.message.success {
-    background-color: rgba(40, 167, 69, 0.2);
-    color: var(--success-color);
-    display: block;
-}
-
-.message.error {
-    background-color: rgba(220, 53, 69, 0.2);
-    color: var(--error-color);
-    display: block;
-}
-
-.error-message {
-    color: var(--error-color);
-    font-size: 14px;
-    margin-top: 15px;
-    height: 20px;
-}
-
-.hidden {
-    display: none !important;
-}
-
-.visible {
-    display: flex !important;
-}
+// --- 初始化 ---
+document.addEventListener('DOMContentLoaded', () => {
+    const storedApiKey = sessionStorage.getItem('adminApiKey');
+    if (storedApiKey) {
+        loginButton.disabled = true;
+        loginButton.textContent = '正在验证...';
+        apiKeyInput.value = storedApiKey;
+        fetchProducts(storedApiKey).then(success => {
+            if (success) {
+                loginOverlay.classList.remove('visible');
+                appContainer.classList.remove('hidden');
+            } else {
+                loginOverlay.classList.add('visible');
+                appContainer.classList.add('hidden');
+                loginButton.disabled = false;
+                loginButton.textContent = '登录';
+            }
+        });
+    } else {
+        loginOverlay.classList.add('visible');
+        appContainer.classList.add('hidden');
+    }
+});
